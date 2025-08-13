@@ -56,13 +56,13 @@
 </head>
 <body>
     <div id="controlPanel">
-        <label for="yearSelect">选择年份:</label>
+        <label for="yearSelect">Choose year:</label>
         <select id="yearSelect"></select>
-        <label for="weekSelect">选择周数:</label>
+        <label for="weekSelect">Choose flu week:</label>
         <select id="weekSelect"></select>
-        <label for="rangeInput">前后范围(周):</label>
-        <input type="number" id="rangeInput" min="1" max="52" value="20">
-        <button onclick="updateChart()">更新图表</button>
+        <button onclick="prevWeek()">Last week</button>
+        <button onclick="nextWeek()">Next week</button>
+        <button onclick="updateChart()">Update prediction</button>
     </div>
     <div id="chartContainer">
         <canvas id="iliChart"></canvas>
@@ -71,12 +71,12 @@
     <script>
         // 全局变量，用于存储加载的数据
         let iliData = [];
+        let trueData = [];
         let chart;
         let yearWeekMap = {}; // 声明为全局变量
 
         const yearSelect = document.getElementById('yearSelect');
         const weekSelect = document.getElementById('weekSelect');
-        const rangeInput = document.getElementById('rangeInput');
         const ctx = document.getElementById('iliChart').getContext('2d');
 
         // 异步加载数据并初始化
@@ -105,8 +105,13 @@
                 });
                 yearSelect.value = availableYears[0];
                 updateWeekOptions();
+                computeTrueData();
 
-                yearSelect.addEventListener('change', updateWeekOptions);
+                yearSelect.addEventListener('change', () => {
+                    updateWeekOptions();
+                    computeTrueData();
+                    updateChart();
+                });
             } catch (error) {
                 console.error("加载数据失败:", error);
                 alert(`数据加载失败: ${error.message}`);
@@ -122,6 +127,36 @@
             });
             weekSelect.value = weeks[0];
         }
+
+        function computeTrueData() {
+            let selectedYear = parseInt(yearSelect.value);
+            const selectedWeek = parseInt(weekSelect.value);
+            console.log(selectedYear,selectedWeek)
+            const startDate = moment(getStartDate(selectedYear, selectedWeek));
+            selectedYear = moment(startDate).year();
+            console.log('开始日期',startDate)
+            // 根据 startDate 的月份动态定义时间范围
+            let start, end;
+            if (startDate.month() >= 8) { // 9月及以后（月份从0开始计数）
+                start = moment(startDate).year(selectedYear).month(8).date(1).startOf('day'); // 当年9月1日
+                end = moment(startDate).year(selectedYear + 1).month(8).endOf('month').endOf('day'); // 下一年9月30日
+            } else { // 1-8月
+                start = moment(startDate).year(selectedYear - 1).month(8).date(1).startOf('day'); // 上一年9月1日
+                end = moment(startDate).year(selectedYear).month(8).endOf('month').endOf('day'); // 当年9月30日
+            }
+            
+            const tTrue = iliData.filter(item => {
+                const date = moment(item.date);
+                return date >= start && date < end;
+            }).reduce((acc, item) => {
+                const key = item.date;
+                if (!acc[key]) acc[key] = { date: item.date, true: item.true };
+                return acc;
+            }, {});
+
+            trueData = Object.values(tTrue).sort((a, b) => new Date(a.date) - new Date(b.date));
+        }
+
         initialize();
 
         function getStartDate(year, week) {
@@ -134,32 +169,62 @@
                 .format("YYYY-MM-DDTHH:mm:ss");
         }
 
+        function prevWeek() {
+            const selectedYear = parseInt(yearSelect.value);
+            let currentWeek = parseInt(weekSelect.value);
+            let weeks = Array.from(yearWeekMap[selectedYear]).sort((a, b) => a - b);
+            let index = weeks.indexOf(currentWeek);
+
+            if (index > 0) {
+                weekSelect.value = weeks[index - 1];
+                computeTrueData();
+            } else {
+                const prevYear = selectedYear - 1;
+                if (yearWeekMap[prevYear]) {
+                    yearSelect.value = prevYear;
+                    updateWeekOptions();
+                    weeks = Array.from(yearWeekMap[prevYear]).sort((a, b) => a - b);
+                    weekSelect.value = weeks[weeks.length - 1];
+                    computeTrueData();
+                } else {
+                    return; // 无上一年
+                }
+            }
+            updateChart();
+        }
+
+        function nextWeek() {
+            const selectedYear = parseInt(yearSelect.value);
+            let currentWeek = parseInt(weekSelect.value);
+            let weeks = Array.from(yearWeekMap[selectedYear]).sort((a, b) => a - b);
+            let index = weeks.indexOf(currentWeek);
+
+            if (index < weeks.length - 1) {
+                weekSelect.value = weeks[index + 1];
+                computeTrueData();
+            } else {
+                const nextYear = selectedYear + 1;
+                if (yearWeekMap[nextYear]) {
+                    yearSelect.value = nextYear;
+                    updateWeekOptions();
+                    weeks = Array.from(yearWeekMap[nextYear]).sort((a, b) => a - b);
+                    weekSelect.value = weeks[0];
+                    computeTrueData();
+                } else {
+                    return; // 无下一年
+                }
+            }
+            updateChart();
+        }
+
         function updateChart() {
             const selectedYear = parseInt(yearSelect.value);
             const selectedWeek = parseInt(weekSelect.value);
-            const rangeWeeks = parseInt(rangeInput.value);
 
             try {
-                // 计算时间范围
+                // 计算起始日期
                 const startDate = moment(getStartDate(selectedYear, selectedWeek));
-                const startRange = startDate.clone().subtract(rangeWeeks, 'weeks');
-                const endDate = startDate.clone().add(rangeWeeks, 'weeks');
-                console.log("开始日期", startDate);
 
-                // 筛选真实值数据
-                const tTrue = iliData.filter(item => {
-                    const date = moment(item.date);
-                    const originalDate = moment(item.original_date);
-                    return date >= startRange && date <= endDate;
-                }).reduce((acc, item) => {
-                    const key = item.date;
-                    if (!acc[key]) acc[key] = { date: item.date, true: item.true };
-                    return acc;
-                }, {});
-                
-                const trueData = Object.values(tTrue).sort((a, b) => new Date(a.date) - new Date(b.date));
-                
-                
                 // 筛选预测值数据（仅startDate当周）
                 const tPoint = iliData.filter(item => {
                     const originalDate = moment(item.original_date);
@@ -179,14 +244,33 @@
                     }
                 ];
 
-                const colors = ['red', 'blue', 'green', 'purple', 'orange'];
+                const colors = ['salmon', 'blue', 'green', 'purple', 'orange'];
                 methods.forEach((method, i) => {
                     const methodData = tPoint.filter(item => item.method === method)
-                        .map(item => ({ x: item.date, y: item.point }))
+                        .map(item => ({ 
+                            x: item.date, 
+                            y: item.point,
+                            q_2: item.q_2,
+                            q_97: item.q_97
+                        }))
                         .sort((a, b) => new Date(a.x) - new Date(b.x));
+
+                    // 添加预测区间（带状）
+                    datasets.push({
+                        label: `Prediction Interval (${method})`,
+                        data: methodData.map(item => ({ x: item.x, y: [item.q_2, item.q_97] })),
+                        borderColor: colors[i % colors.length],
+                        backgroundColor: colors[i % colors.length] + '33', // 透明度0.2
+                        fill: true,
+                        pointStyle: false,
+                        showLine: false,
+                        tension: 0
+                    });
+
+                    // 添加预测点
                     datasets.push({
                         label: `Prediction (${method})`,
-                        data: methodData,
+                        data: methodData.map(item => ({ x: item.x, y: item.y })),
                         borderColor: colors[i % colors.length],
                         backgroundColor: colors[i % colors.length],
                         pointStyle: 'cross',
@@ -202,10 +286,18 @@
                     data: { datasets },
                     options: {
                         responsive: true,
+                        animation: false, // 禁用动画
                         plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    boxWidth: 15,
+                                    padding: 20
+                                }
+                            },
                             title: {
                                 display: true,
-                                text: `ILI 数据趋势 (${startDate.format('YYYY-MM-DD')})`,
+                                text: `ILI+ prediction from ${startDate.format('YYYY-MM-DD')}`,
                                 font: { size: 18 }
                             }
                         },
@@ -213,25 +305,30 @@
                             x: {
                                 type: 'time',
                                 time: {
-                                parser: 'YYYY-MM-DDTHH:mm:ss', // 匹配你的 ISO 格式
-                                tooltipFormat: 'YYYY-MM-DD',   // 提示框显示简略日期
-                                unit: 'week',                  // 按周显示
-                                displayFormats: {
-                                    week: 'YYYY-MM-DD'         // 坐标轴标签格式
+                                    parser: 'YYYY-MM-DDTHH:mm:ss',
+                                    tooltipFormat: 'YYYY-MM-DD',
+                                    unit: 'week',
+                                    displayFormats: {
+                                        week: 'YYYY-MM-DD'
                                     }
                                 },
-                                title: { display: true, text: '日期' }
+                                ticks: {
+                                    autoSkip: true,
+                                    maxTicksLimit: 10,
+                                    maxRotation: 45
+                                },
+                                title: { display: true, text: 'date' }
                             },
                             y: {
-                                title: { display: true, text: '值' },
+                                title: { display: true, text: 'ILI+' },
                                 beginAtZero: true
                             }
                         }
                     }
                 });
             } catch (e) {
-                console.error('绘图时出错:', e);
-                alert('绘图时出错，请检查选择的时间范围');
+                console.error('error:', e);
+                alert('error, please select time range');
             }
         }
 
